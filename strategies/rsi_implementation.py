@@ -1,22 +1,24 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import vectorbtpro as vbt
 import datetime
 import pandas as pd
 import numpy as np
-import talib
-from numba import njit
 import warnings
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import os
+from data.alpaca_client import download_stock_data_rsi
 warnings.filterwarnings('ignore')
+import exchange_calendars as ecals
 
 
-STOCKS = ['EVLV', 'MSFT', 'GOOGL', 'AMZN', 'SPY']
-
+STOCKS = ['SPY']
 
 end_date = datetime.datetime.now()
-start_date = end_date - datetime.timedelta(days=30)
+start_date = end_date - datetime.timedelta(days=1)
+
 vbt.AlpacaData.set_custom_settings(
     client_config=dict(
         api_key=os.getenv("ALPACA_API_KEY"),
@@ -24,32 +26,53 @@ vbt.AlpacaData.set_custom_settings(
     )
 )
 
-def download_stock_data(symbol, start_date, end_date):
-    try:
-        data = vbt.AlpacaData.pull(
-            symbol,
-            start=start_date,
-            end=end_date,
-            timeframe="1m",
-            adjustment="all",
-            tz="US/Eastern",
-        )
-        close_price = data.get("Close")
-        if close_price is not None and len(close_price) > 50:
-            return close_price
-        else:
-            print(f"Insufficient data for {symbol}")
-            return None
-    except Exception as e:
-        print(f"Error downloading {symbol}: {e}")
-        return None
-
-
 def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30, exit_level=75):
     try:
         rsi = vbt.RSI.run(price_data, window=rsi_window)
-        entries = rsi.rsi_crossed_below(entry_level)
-        exits = rsi.rsi_crossed_above(exit_level)
+        
+        # Pick your exchange, e.g. New York Stock Exchange
+        calendar = ecals.get_calendar("XNYS")
+
+        # Build valid trading sessions for your data range
+        sessions = calendar.sessions_in_range(
+            price_data.index.min().date(),
+            price_data.index.max().date()
+        )
+
+        # DEBUG: Let's check each mask component
+        print(f"DEBUG - Price data index range: {price_data.index.min()} to {price_data.index.max()}")
+        print(f"DEBUG - Sessions range: {sessions.min()} to {sessions.max()}")
+        
+        # Fix holiday mask - convert sessions to date format that matches index
+        sessions_dates = pd.to_datetime(sessions).date
+        index_dates = price_data.index.date
+        holiday_mask = pd.Series([d in sessions_dates for d in index_dates], index=price_data.index)
+        
+        print(f"DEBUG - Holiday mask True count: {holiday_mask.sum()}/{len(holiday_mask)}")
+
+        # Create time mask - using between_time to get boolean mask
+        time_mask = price_data.index.indexer_between_time("9:30", "16:00")
+        # Convert indexer to boolean mask
+        time_bool_mask = pd.Series(False, index=price_data.index)
+        if len(time_mask) > 0:
+            time_bool_mask.iloc[time_mask] = True
+        
+        print(f"DEBUG - Time mask True count: {time_bool_mask.sum()}/{len(time_bool_mask)}")
+        
+        weekday_mask = price_data.index.weekday.isin([0, 1, 2, 3, 4])
+        print(f"DEBUG - Weekday mask True count: {weekday_mask.sum()}/{len(weekday_mask)}")
+
+        final_mask = time_bool_mask & weekday_mask & holiday_mask
+        print(f"DEBUG - Final mask True count: {final_mask.sum()}/{len(final_mask)}")
+        
+        # If no valid trading times, skip time filtering for now
+        if final_mask.sum() == 0:
+            print(f"WARNING: No valid trading times found, using weekday filter only")
+            final_mask = weekday_mask & holiday_mask
+            print(f"DEBUG - Simplified final mask True count: {final_mask.sum()}/{len(final_mask)}")
+
+        entries = rsi.rsi_crossed_below(entry_level) & final_mask
+        exits = rsi.rsi_crossed_above(exit_level) & final_mask
 
         if not entries.any() or not exits.any():
             return None
@@ -58,22 +81,27 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
             price_data,
             entries,
             exits,
-            init_cash=100000,
+            init_cash=20000,
             sl_stop=0.05,
             tp_stop=0.03,
-            accumulate=False
+            accumulate=False,
         )
 
         try:
-            total_return = pf.total_return
-            sharpe_ratio = pf.sharpe_ratio
-            max_drawdown = pf.max_drawdown
-            win_rate = pf.trades.win_rate() if pf.trades.count() > 0 else 0
-            num_trades = pf.trades.count()
+            stats = pf.stats()
+            
+            total_return = stats['Total Return [%]'] / 100 if 'Total Return [%]' in stats else pf.total_return
+            sharpe_ratio = stats['Sharpe Ratio'] if 'Sharpe Ratio' in stats else 0
+            max_drawdown = stats['Max Drawdown [%]'] / 100 if 'Max Drawdown [%]' in stats else 0
+            num_trades = stats['Total Trades'] if 'Total Trades' in stats else 0
+            win_rate = stats['Win Rate [%]'] / 100 if 'Win Rate [%]' in stats else 0
+            
             initial_capital = pf.init_cash
             final_capital = pf.value.iloc[-1]
             profit = final_capital - initial_capital
-        except:
+            
+        except Exception as e:
+            print(f"Error getting stats for {symbol}: {e}")
             total_return = (pf.value.iloc[-1] / pf.value.iloc[0]) - 1
             sharpe_ratio = 0
             max_drawdown = 0
@@ -98,7 +126,8 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
             'data_points': len(price_data),
             'initial_capital': initial_capital,
             'final_capital': final_capital,
-            'profit': profit
+            'profit': profit,
+            'portfolio': pf  # Store the portfolio for trade details
         }
     except Exception as e:
         print(f"Error testing RSI strategy on {symbol}: {e}")
@@ -223,6 +252,75 @@ def plot_best_strategy(price_data, symbol, best_params):
     except Exception as e:
         print(f"Error plotting best strategy for {symbol}: {e}")
 
+def show_detailed_trades(optimization_results):
+    """Show detailed trade information for each symbol"""
+    print(f"\n" + "="*100)
+    print("DETALLES DE TRADES POR SÍMBOLO")
+    print("="*100)
+    
+    for result in optimization_results:
+        symbol = result['symbol']
+        pf = result['portfolio']
+        
+        print(f"\n🔍 TRADES DETALLADOS PARA {symbol}")
+        print(f"Configuración: RSI Window={result['rsi_window']}, Entry={result['entry_level']}, Exit={result['exit_level']}")
+        print("-" * 80)
+        
+        try:
+            trades = pf.trades.records
+            
+            if len(trades) > 0:
+                print(f"📈 Total de trades: {len(trades)}")
+                print(f"{'#':<3} {'Tipo':<6} {'Cantidad':<12} {'Fecha Entrada':<20} {'Precio Entrada':<15} {'Fecha Salida':<20} {'Precio Salida':<15} {'PnL':<12} {'Return %':<10}")
+                print("-" * 135)
+                
+                for i, (idx, trade) in enumerate(trades.iterrows()):
+                    try:
+                        entry_idx = int(trade['entry_idx'])
+                        exit_idx = int(trade['exit_idx'])
+                        entry_price = float(trade['entry_price'])
+                        exit_price = float(trade['exit_price'])
+                        pnl = float(trade['pnl'])
+                        size = float(trade['size'])
+                        return_pct = float(trade['return']) * 100
+                        
+                        entry_date = pf.wrapper.index[entry_idx] if entry_idx < len(pf.wrapper.index) else "N/A"
+                        exit_date = pf.wrapper.index[exit_idx] if exit_idx < len(pf.wrapper.index) and exit_idx >= 0 else "Open"
+                        
+                        trade_type = "LONG" if size > 0 else "SHORT"
+                        
+                        exit_price_str = f"${exit_price:.2f}" if exit_price > 0 else "Open"
+                        
+                        print(f"{i+1:<3} {trade_type:<6} {abs(size):<11.2f} {str(entry_date):<20} ${entry_price:<14.2f} {str(exit_date):<20} {exit_price_str:<15} ${pnl:<11.2f} {return_pct:<9.2f}%")
+                        
+                    except Exception as trade_error:
+                        print(f"Error procesando trade {i+1}: {trade_error}")
+                        print(f"   Trade data: {trade}")
+                            
+            else:
+                print("❌ No se encontraron trades registrados")
+                
+                try:
+                    print(f"\n📊 Estadísticas del portfolio:")
+                    stats = pf.stats()
+                    for key, value in stats.items():
+                        print(f"   {key}: {value}")
+                except Exception as stats_error:
+                    print(f"Error mostrando estadísticas: {stats_error}")
+                    
+        except Exception as e:
+            print(f"Error mostrando trades para {symbol}: {e}")
+            
+            try:
+                print(f"\n📊 Estadísticas del portfolio para {symbol}:")
+                stats = pf.stats()
+                for key, value in stats.items():
+                    print(f"   {key}: {value}")
+            except Exception as stats_error:
+                print(f"Error mostrando estadísticas: {stats_error}")
+            
+        print("\n" + "-" * 80)
+
 print("="*80)
 print("OPTIMIZACIÓN DE PARÁMETROS RSI POR STOCK INDIVIDUAL")
 print("="*80)
@@ -230,7 +328,7 @@ print("="*80)
 stock_data = {}
 for symbol in STOCKS:
     print(f"Descargando datos para {symbol}...")
-    data = download_stock_data(symbol, start_date, end_date)
+    data = download_stock_data_rsi(symbol, start_date, end_date)
     if data is not None:
         stock_data[symbol] = data
         print(f"✓ {symbol}: {len(data)} puntos de datos descargados")
@@ -276,6 +374,8 @@ for symbol, price_data in stock_data.items():
 
         print(f"\n📈 Generando gráfico para {symbol}...")
         plot_best_strategy(price_data, symbol, best_params)
+        
+        show_detailed_trades([best_params])
 
     else:
         print(f"❌ No se encontraron configuraciones válidas para {symbol}")
@@ -309,6 +409,8 @@ if optimization_results:
         print(f"📊 Retorno promedio (stocks rentables): {avg_return:.2%}")
         print(f"💰 Ganancia promedio (stocks rentables): ${avg_profit:,.2f}")
         print(f"💎 Ganancia total combinada: ${total_profit:,.2f}")
+
+    show_detailed_trades(optimization_results)
 
 else:
     print("❌ No se encontraron configuraciones válidas para ningún stock")

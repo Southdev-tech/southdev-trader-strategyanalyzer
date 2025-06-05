@@ -1,151 +1,21 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import vectorbtpro as vbt
 import datetime
 import pandas as pd
 import numpy as np
-import talib
-from numba import njit
 import warnings
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from data.alpaca_client import download_stock_data_vwap
 warnings.filterwarnings('ignore')
-import os
-
 
 STOCKS = ['EVLV', 'MSFT', 'GOOGL', 'AMZN', 'SPY']
 
 end_date = datetime.datetime.now()
 start_date = end_date - datetime.timedelta(days=1)
-vbt.AlpacaData.set_custom_settings(
-    client_config=dict(
-        api_key=os.getenv("ALPACA_API_KEY"),
-        secret_key=os.getenv("ALPACA_SECRET_KEY")
-    )
-)
-
-def download_stock_data(symbol, start_date, end_date):
-    try:
-        data = vbt.AlpacaData.pull(
-            symbol,
-            start=start_date,  
-            end=end_date,  
-            timeframe="1m",
-            adjustment="all",
-            tz="US/Eastern",
-            data_type="trade",
-        )
-        
-        ohlcv_data = convert_trades_to_ohlcv(data, symbol)
-        
-        if ohlcv_data is not None and len(ohlcv_data.get('Close')) > 50:
-            resampled_data = resample_to_4_seconds(ohlcv_data)
-            return resampled_data
-        else:
-            print(f"Insufficient data for {symbol}")
-            return None
-    except Exception as e:
-        print(f"Error downloading {symbol}: {e}")
-        return None
-
-def convert_trades_to_ohlcv(trade_data, symbol):
-    """
-    Convert individual trade data to OHLCV format for VWAP calculation.
-    Trade data structure: Exchange, Trade price, Trade size, Trade ID, Conditions, Tape
-    """
-    try:
-        df = trade_data.get()
-        
-        if df is None or len(df) == 0:
-            print(f"No trade data available for {symbol}")
-            return None
-        
-        print(f"   📊 Converting {len(df)} trades to OHLCV format for {symbol}")
-        print(f"   📋 Trade data columns: {list(df.columns)}")
-        
-        price_col = None
-        volume_col = None
-        
-        for col in df.columns:
-            if 'price' in col.lower() or col.lower() == 'price':
-                price_col = col
-                break
-        
-        for col in df.columns:
-            if 'size' in col.lower() or 'volume' in col.lower():
-                volume_col = col
-                break
-        
-        if price_col is None:
-            print(f"❌ Could not find price column in trade data for {symbol}")
-            print(f"   Available columns: {list(df.columns)}")
-            return None
-            
-        if volume_col is None:
-            print(f"❌ Could not find volume/size column in trade data for {symbol}")
-            print(f"   Available columns: {list(df.columns)}")
-            return None
-        
-        print(f"   ✓ Using price column: '{price_col}', volume column: '{volume_col}'")
-        
-        df_trades = df[[price_col, volume_col]].copy()
-        df_trades.columns = ['Price', 'Volume']
-        
-        ohlcv = df_trades.resample('4S').agg({
-            'Price': ['first', 'max', 'min', 'last'],  # Open, High, Low, Close
-            'Volume': 'sum'
-        }).dropna()
-        
-        ohlcv.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-        
-        ohlcv = ohlcv.fillna(method='ffill').dropna()
-        
-        if len(ohlcv) == 0:
-            print(f"❌ No OHLCV data generated for {symbol}")
-            return None
-        
-        print(f"   ✅ Generated {len(ohlcv)} OHLCV bars from {len(df)} trades")
-        
-        class OHLCVData:
-            def __init__(self, dataframe):
-                self.df = dataframe
-            
-            def get(self, column=None):
-                if column is None:
-                    return self.df
-                else:
-                    return self.df[column]
-        
-        return OHLCVData(ohlcv)
-        
-    except Exception as e:
-        print(f"Error converting trades to OHLCV for {symbol}: {e}")
-        return None
-
-def resample_to_4_seconds(data):
-    """
-    Since we already converted trades to 4-second OHLCV bars, 
-    we can return the data as-is or do additional processing if needed.
-    """
-    try:
-        df = data.get()
-        
-        print(f"   📊 Using {len(df)} pre-generated 4-second OHLCV bars")
-        
-        class ResampledData:
-            def __init__(self, dataframe):
-                self.df = dataframe
-            
-            def get(self, column=None):
-                if column is None:
-                    return self.df
-                else:
-                    return self.df[column]
-        
-        return ResampledData(df)
-        
-    except Exception as e:
-        print(f"Error processing 4-second data: {e}")
-        return data
 
 def calculate_vwap(data):
     try:
@@ -189,15 +59,11 @@ def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_thresho
             sl_stop=0.05,
             tp_stop=0.03,
             accumulate=False,
-            cash_sharing=True,
-            call_seq='auto'
         )
         
         try:
-            # Use VectorBT's built-in stats - show all stats in table format
             stats = pf.stats()
             
-            # Extract values for optimization comparison
             total_return = stats['Total Return [%]'] / 100 if 'Total Return [%]' in stats else pf.total_return
             sharpe_ratio = stats['Sharpe Ratio'] if 'Sharpe Ratio' in stats else 0
             max_drawdown = stats['Max Drawdown [%]'] / 100 if 'Max Drawdown [%]' in stats else 0
@@ -210,7 +76,6 @@ def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_thresho
             
         except Exception as e:
             print(f"Error getting stats for {symbol}: {e}")
-            # Fallback calculation
             total_return = (pf.value.iloc[-1] / pf.value.iloc[0]) - 1
             sharpe_ratio = 0
             max_drawdown = 0
@@ -400,7 +265,6 @@ def show_detailed_trades(optimization_results):
         print("-" * 80)
         
         try:
-            # Get trade records (DataFrame)
             trades = pf.trades.records
             
             if len(trades) > 0:
@@ -465,7 +329,7 @@ print("="*80)
 stock_data = {}
 for symbol in STOCKS:
     print(f"Descargando datos de trades para {symbol}...")
-    data = download_stock_data(symbol, start_date, end_date)
+    data = download_stock_data_vwap(symbol, start_date, end_date)
     if data is not None:
         stock_data[symbol] = data
         close_data = data.get('Close')
