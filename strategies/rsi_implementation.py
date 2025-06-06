@@ -40,10 +40,10 @@ def print_separator(char="-"):
 
 # Configuration constants
 INITIAL_CAPITAL = 20000  # Single source of truth for initial capital
-STOCKS = ['SATL', 'SPY', 'EVLV', 'TSLA']
+STOCKS = ['SATL']
 
 end_date = datetime.datetime.now()
-start_date = end_date - datetime.timedelta(days=4)
+start_date = end_date - datetime.timedelta(days=1)
 
 vbt.AlpacaData.set_custom_settings(
     client_config=dict(
@@ -52,7 +52,7 @@ vbt.AlpacaData.set_custom_settings(
     )
 )
 
-def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30, exit_level=75):
+def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30, exit_level=75, show_warnings=True):
     try:
         rsi = vbt.RSI.run(price_data, window=rsi_window)
         
@@ -84,7 +84,8 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
         
         # If no valid trading times, skip time filtering for now
         if final_mask.sum() == 0:
-            print(f"WARNING: No valid trading times found, using weekday filter only")
+            if show_warnings:
+                print(f"WARNING: No valid trading times found for {symbol}, using weekday filter only")
             final_mask = weekday_mask & holiday_mask
 
         entries = rsi.rsi_crossed_below(entry_level) & final_mask
@@ -106,26 +107,43 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
         try:
             stats = pf.stats()
             
-            total_return = stats['Total Return [%]'] / 100 if 'Total Return [%]' in stats else pf.total_return
-            sharpe_ratio = stats['Sharpe Ratio'] if 'Sharpe Ratio' in stats else 0
-            max_drawdown = stats['Max Drawdown [%]'] / 100 if 'Max Drawdown [%]' in stats else 0
-            num_trades = stats['Total Trades'] if 'Total Trades' in stats else 0
-            win_rate = stats['Win Rate [%]'] / 100 if 'Win Rate [%]' in stats else 0
+            # Handle different stat formats - convert to dict if needed
+            if hasattr(stats, 'to_dict'):
+                stats_dict = stats.to_dict()
+            elif isinstance(stats, dict):
+                stats_dict = stats
+            else:
+                # Fallback if stats are not in expected format
+                stats_dict = {}
+            
+            total_return = stats_dict.get('Total Return [%]', 0) / 100 if 'Total Return [%]' in stats_dict else (pf.value.iloc[-1] / pf.value.iloc[0] - 1 if len(pf.value) > 0 else 0)
+            sharpe_ratio = stats_dict.get('Sharpe Ratio', 0) if 'Sharpe Ratio' in stats_dict else 0
+            max_drawdown = stats_dict.get('Max Drawdown [%]', 0) / 100 if 'Max Drawdown [%]' in stats_dict else 0
+            num_trades = stats_dict.get('Total Trades', 0) if 'Total Trades' in stats_dict else 0
+            win_rate = stats_dict.get('Win Rate [%]', 0) / 100 if 'Win Rate [%]' in stats_dict else 0
             
             initial_capital = pf.init_cash
-            final_capital = pf.value.iloc[-1]
+            final_capital = pf.value.iloc[-1] if len(pf.value) > 0 else initial_capital
             profit = final_capital - initial_capital
             
         except Exception as e:
             print(f"Error getting stats for {symbol}: {e}")
-            total_return = (pf.value.iloc[-1] / pf.value.iloc[0]) - 1
+            # Fallback calculations
+            try:
+                initial_capital = pf.init_cash if hasattr(pf, 'init_cash') else INITIAL_CAPITAL
+                final_capital = pf.value.iloc[-1] if len(pf.value) > 0 else initial_capital
+                total_return = (final_capital / initial_capital) - 1 if initial_capital > 0 else 0
+                profit = final_capital - initial_capital
+            except:
+                initial_capital = INITIAL_CAPITAL
+                final_capital = INITIAL_CAPITAL
+                total_return = 0
+                profit = 0
+            
             sharpe_ratio = 0
             max_drawdown = 0
             win_rate = 0
             num_trades = 0
-            initial_capital = INITIAL_CAPITAL
-            final_capital = pf.value.iloc[-1] if len(pf.value) > 0 else INITIAL_CAPITAL
-            profit = final_capital - initial_capital
 
         return {
             'symbol': symbol,
@@ -162,6 +180,7 @@ def optimize_rsi_for_stock(price_data, symbol):
 
     total_combinations = len(rsi_windows) * len(entry_levels) * len(exit_levels)
     current_combination = 0
+    warning_shown = False
 
     for rsi_window in rsi_windows:
         for entry_level in entry_levels:
@@ -171,7 +190,10 @@ def optimize_rsi_for_stock(price_data, symbol):
                 if entry_level >= exit_level:
                     continue
 
-                result = test_rsi_strategy_on_stock(price_data, symbol, rsi_window, entry_level, exit_level)
+                # Only show warnings for the first combination to avoid spam
+                show_warnings = not warning_shown
+                result = test_rsi_strategy_on_stock(price_data, symbol, rsi_window, entry_level, exit_level, show_warnings)
+                warning_shown = True
 
                 if result:
                     all_results.append(result)

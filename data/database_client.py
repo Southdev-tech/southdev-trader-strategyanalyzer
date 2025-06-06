@@ -6,8 +6,8 @@ load_dotenv()
 
 def get_database_config():
     """
-    Obtiene la configuración de la base de datos desde variables de entorno
-    con valores por defecto para desarrollo local
+    Obtain the database configuration from environment variables
+    with default values for local development
     """
     config = {
         "database": os.getenv("DATABASE_NAME", "postgres"),
@@ -25,29 +25,18 @@ def test_database_connection():
     try:
         config = get_database_config()
         
-        print("🔗 Intentando conectar con la configuración:")
-
+        print("🔗 Attempting to connect with configuration:")
+        print(f"   Host: {config['host']}")
+        print(f"   Port: {config['port']}")
+        print(f"   Database: {config['database']}")
+        print(f"   User: {config['user']}")
+        
         connection = psycopg2.connect(**config)
-        cursor = connection.cursor()
-        
-        cursor.execute("SELECT version();")
-        db_version = cursor.fetchone()
-        
-        print("✅ Conexión exitosa!")
-        print(f"   Versión PostgreSQL: {db_version[0]}")
-        
-        cursor.close()
-        connection.close()
-        
-        return True
-        
-    except psycopg2.OperationalError as e:
-        print("❌ Error de conexión:")
-        return False
-        
+        print("✅ Database connection successful")
+        return connection
     except Exception as e:
-        print(f"❌ Error inesperado: {e}")
-        return False
+        print(f"❌ Database connection error: {e}")
+        return None
     
 if __name__ == "__main__":
     print("="*60)

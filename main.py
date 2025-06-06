@@ -1,3 +1,10 @@
+import os
+import sys
+from dotenv import load_dotenv
+
+# Load environment variables FIRST (including NUMBA_DISABLE_JIT=1) before importing VectorBT
+load_dotenv()
+
 import vectorbtpro as vbt
 import datetime
 import pandas as pd
@@ -6,8 +13,6 @@ import warnings
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import os
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 import time
@@ -26,18 +31,17 @@ from strategies.vwap_implementation import (
 
 warnings.filterwarnings('ignore')
 
-STOCKS = ['EVLV', 'MSFT', 'GOOGL', 'AMZN', 'SPY']
+STOCKS = ['SATL']
 
 TIMEFRAMES = {
-    "1d": 1,
-    "1w": 7,
-    "1m": 22,
-    "1y": 252,
-    "5y": 1260
+    "1_day": 1,      # Last 1 trading day
+    "5_days": 5,     # Last 5 trading days  
+    "2_weeks": 10,   # Last 2 weeks (10 trading days)
+    "1_month": 22,   # Last 1 month (22 trading days)
 }
 
 end_date = datetime.datetime.now()
-start_date = end_date - datetime.timedelta(days=2)
+start_date = end_date - datetime.timedelta(days=30)  # Get 30 days of data for multi-timeframe analysis
 
 vbt.AlpacaData.set_custom_settings(
     client_config=dict(
@@ -53,12 +57,22 @@ def get_timeframe_slice(df, days):
 
 def multi_timeframe_backtest(strategy_func, data, symbol, param_grid, is_vwap=False):
     results = []
+    valid_results = 0
+    total_attempts = 0
+    
     for params in param_grid:
         metrics_per_tf = {}
         for tf_name, tf_days in TIMEFRAMES.items():
+            total_attempts += 1
+            
             if is_vwap:
                 df = data.get()
-                sliced_df = df.iloc[-tf_days:] if len(df) > tf_days else df
+                # Get the most recent date and calculate start date for timeframe
+                end_date = df.index.max()
+                start_date = end_date - pd.Timedelta(days=tf_days)
+                # Filter data for this timeframe
+                sliced_df = df[df.index >= start_date]
+                
                 class Wrapper:
                     def __init__(self, df):
                         self.df = df
@@ -68,21 +82,67 @@ def multi_timeframe_backtest(strategy_func, data, symbol, param_grid, is_vwap=Fa
                         return self.df[col]
                 sliced_data = Wrapper(sliced_df)
             else:
-                sliced_data = data.iloc[-tf_days:] if len(data) > tf_days else data
+                # Get the most recent date and calculate start date for timeframe
+                end_date = data.index.max()
+                start_date = end_date - pd.Timedelta(days=tf_days)
+                # Filter data for this timeframe
+                sliced_data = data[data.index >= start_date]
+                
+            # Skip if we don't have enough data points for analysis
+            min_points_needed = 50 if is_vwap else 30
+            actual_points = len(sliced_data.get()) if is_vwap else len(sliced_data)
+            
+            if actual_points < min_points_needed:
+                print(f"        ⚠️  {tf_name}: Only {actual_points} points, need {min_points_needed} minimum")
+                metrics_per_tf[tf_name] = {
+                    "total_return": 0,
+                    "sharpe_ratio": 0,
+                    "max_drawdown": 0,
+                    "calmar_ratio": 0,
+                    "win_rate": 0,
+                    "sortino_ratio": 0
+                }
+                continue
+                
             try:
-                res = strategy_func(sliced_data, symbol, **params)
+                if is_vwap:
+                    res = strategy_func(sliced_data, symbol, **params)
+                else:
+                    res = strategy_func(sliced_data, symbol, show_warnings=False, **params)
             except Exception as e:
                 res = None
+                
             if res and 'portfolio' in res:
-                stats = res['portfolio'].stats()
-                metrics_per_tf[tf_name] = {
-                    "total_return": stats.get('Total Return [%]', 0) / 100,
-                    "sharpe_ratio": stats.get('Sharpe Ratio', 0),
-                    "max_drawdown": stats.get('Max Drawdown [%]', 0) / 100,
-                    "calmar_ratio": stats.get('Calmar Ratio', 0),
-                    "win_rate": stats.get('Win Rate [%]', 0) / 100,
-                    "sortino_ratio": stats.get('Sortino Ratio', 0)
-                }
+                valid_results += 1
+                try:
+                    stats = res['portfolio'].stats()
+                    # Handle different stat formats - convert to dict if needed
+                    if hasattr(stats, 'to_dict'):
+                        stats_dict = stats.to_dict()
+                    elif isinstance(stats, dict):
+                        stats_dict = stats
+                    else:
+                        # Fallback if stats are not in expected format
+                        stats_dict = {}
+                    
+                    metrics_per_tf[tf_name] = {
+                        "total_return": stats_dict.get('Total Return [%]', 0) / 100,
+                        "sharpe_ratio": stats_dict.get('Sharpe Ratio', 0),
+                        "max_drawdown": stats_dict.get('Max Drawdown [%]', 0) / 100,
+                        "calmar_ratio": stats_dict.get('Calmar Ratio', 0),
+                        "win_rate": stats_dict.get('Win Rate [%]', 0) / 100,
+                        "sortino_ratio": stats_dict.get('Sortino Ratio', 0)
+                    }
+                except Exception as e:
+                    # Fallback to zero metrics if stats fail
+                    metrics_per_tf[tf_name] = {
+                        "total_return": 0,
+                        "sharpe_ratio": 0,
+                        "max_drawdown": 0,
+                        "calmar_ratio": 0,
+                        "win_rate": 0,
+                        "sortino_ratio": 0
+                    }
             else:
                 metrics_per_tf[tf_name] = {
                     "total_return": 0,
@@ -94,6 +154,8 @@ def multi_timeframe_backtest(strategy_func, data, symbol, param_grid, is_vwap=Fa
                 }
         avg_metrics = {k: np.mean([v[k] for v in metrics_per_tf.values()]) for k in ["total_return", "sharpe_ratio", "max_drawdown", "calmar_ratio", "win_rate", "sortino_ratio"]}
         results.append({"params": params, "metrics": metrics_per_tf, "avg_metrics": avg_metrics})
+    
+    print(f"      📊 Multi-timeframe: {valid_results}/{total_attempts} successful strategy tests")
     return results
 
 def get_rsi_param_grid():
@@ -123,66 +185,79 @@ def get_vwap_param_grid(symbol):
     return grid
 
 def download_symbol_data(symbol, start_date, end_date):
-    """Descarga datos para un símbolo específico - SÚPER OPTIMIZADO"""
-    print(f"   🔄 Descargando {symbol}...")
+    """Downloads data for a specific symbol - SUPER OPTIMIZED"""
+    print(f"   🔄 Downloading {symbol}...")
     
     try:
-        rsi_data, vwap_data = download_stock_data_both(symbol, start_date, end_date)
-        return symbol, rsi_data, vwap_data
+        rsi_data_single, vwap_data_single = download_stock_data_both(symbol, start_date, end_date)
+        
+        if rsi_data_single is not None:
+            print(f"   ✅ RSI: {len(rsi_data_single)} data points")
+        else:
+            print(f"   ❌ Failed to get RSI data for {symbol}")
+        
+        if vwap_data_single is not None:
+            print(f"   ✅ VWAP: {len(vwap_data_single.get('Close'))} data points")
+        else:
+            print(f"   ❌ Failed to get VWAP data for {symbol}")
+            
+        return symbol, rsi_data_single, vwap_data_single
         
     except Exception as e:
-        print(f"   ❌ Error descargando {symbol}: {e}")
+        print(f"   ❌ Error downloading {symbol}: {e}")
         return symbol, None, None
 
-def analyze_symbol_individual(symbol, rsi_data_dict, vwap_data_dict):
-    """Analiza un símbolo específico en la Fase 1"""
-    if symbol not in rsi_data_dict or symbol not in vwap_data_dict:
+def analyze_symbol_individual(symbol, rsi_data, vwap_data):
+    """Analyzes a specific symbol in Phase 1"""
+    if symbol not in rsi_data or symbol not in vwap_data:
         return None
     
-    print(f"   🔍 Analizando {symbol}...")
+    print(f"   🔍 Analyzing {symbol}...")
     
     try:
-        best_rsi_result = optimize_rsi_for_stock(rsi_data_dict[symbol], symbol)
+        # Unpack the tuples returned by optimization functions
+        best_rsi_result, rsi_all_results = optimize_rsi_for_stock(rsi_data[symbol], symbol)
         
-        best_vwap_result = optimize_vwap_for_stock(vwap_data_dict[symbol], symbol)
+        best_vwap_result, vwap_all_results = optimize_vwap_for_stock(vwap_data[symbol], symbol)
         
         rsi_return = best_rsi_result['total_return'] if best_rsi_result else 0
         vwap_return = best_vwap_result['total_return'] if best_vwap_result else 0
-        winner = 'VWAP' if vwap_return > rsi_return else 'RSI'
         
-        result = {
+        winner = 'RSI' if rsi_return > vwap_return else 'VWAP'
+        
+        return {
             'symbol': symbol,
             'rsi': best_rsi_result,
             'vwap': best_vwap_result,
             'winner': winner
         }
         
-        print(f"   ✓ {symbol}: {winner} ganó ({rsi_return:.2%} RSI vs {vwap_return:.2%} VWAP)")
-        return result
-        
     except Exception as e:
-        print(f"   ❌ Error analizando {symbol}: {e}")
+        print(f"   ❌ Error analyzing {symbol}: {e}")
         return None
 
 def analyze_symbol_multiframe(symbol, rsi_data_dict, vwap_data_dict):
-    """Analiza un símbolo específico en multi-timeframe"""
+    """Analyzes a specific symbol with multi-timeframe in Phase 2"""
     if symbol not in rsi_data_dict or symbol not in vwap_data_dict:
         return None
     
     print(f"   🔍 Multi-timeframe {symbol}...")
+    print(f"      📅 Testing timeframes: {', '.join(TIMEFRAMES.keys())}")
     
     try:
         # RSI
+        print(f"      ⚡ RSI multi-timeframe analysis...")
         rsi_param_grid = get_rsi_param_grid()
         rsi_results = multi_timeframe_backtest(test_rsi_strategy_on_stock, rsi_data_dict[symbol], symbol, rsi_param_grid, is_vwap=False)
         best_rsi = max(rsi_results, key=lambda x: x['avg_metrics']['total_return'])
         
         # VWAP
+        print(f"      ⚡ VWAP multi-timeframe analysis...")
         vwap_param_grid = get_vwap_param_grid(symbol)
         vwap_results = multi_timeframe_backtest(test_vwap_strategy_on_stock, vwap_data_dict[symbol], symbol, vwap_param_grid, is_vwap=True)
         best_vwap = max(vwap_results, key=lambda x: x['avg_metrics']['total_return'])
         
-        # Comparación
+        # Comparison
         winner = 'RSI' if best_rsi['avg_metrics']['total_return'] > best_vwap['avg_metrics']['total_return'] else 'VWAP'
         
         result = {
@@ -192,7 +267,7 @@ def analyze_symbol_multiframe(symbol, rsi_data_dict, vwap_data_dict):
             'winner': winner
         }
         
-        print(f"   ✓ Multi-timeframe {symbol}: {winner} ganó")
+        print(f"   ✓ Multi-timeframe {symbol}: {winner} won (RSI: {best_rsi['avg_metrics']['total_return']:.2%}, VWAP: {best_vwap['avg_metrics']['total_return']:.2%})")
         return result
         
     except Exception as e:
@@ -200,13 +275,13 @@ def analyze_symbol_multiframe(symbol, rsi_data_dict, vwap_data_dict):
         return None
 
 print("="*100)
-print("📥 Descargando datos históricos (5 años) - PARALELO")
+print("📥 Downloading historical data (30 days) - PARALLEL")
 print("="*100)
 
 rsi_data = {}
 vwap_data = {}
 
-with ThreadPoolExecutor(max_workers=3) as executor:  # 3 workers para no saturar API
+with ThreadPoolExecutor(max_workers=4) as executor:
     future_to_symbol = {
         executor.submit(download_symbol_data, symbol, start_date, end_date): symbol 
         for symbol in STOCKS
@@ -217,94 +292,86 @@ with ThreadPoolExecutor(max_workers=3) as executor:  # 3 workers para no saturar
         try:
             symbol_result, rsi_result, vwap_result = future.result()
             if rsi_result is not None:
-                rsi_data[symbol] = rsi_result
+                rsi_data[symbol_result] = rsi_result
             if vwap_result is not None:
-                vwap_data[symbol] = vwap_result
+                vwap_data[symbol_result] = vwap_result
+                
         except Exception as e:
-            print(f"   ❌ Error descargando {symbol}: {e}")
+            print(f"   ❌ Error downloading {symbol}: {e}")
 
-print(f"\n✅ Descarga completada: RSI ({len(rsi_data)}), VWAP ({len(vwap_data)})")
+print(f"\n✅ Download completed: RSI ({len(rsi_data)}), VWAP ({len(vwap_data)})")
 
 print("\n" + "="*100)
-print("🔍 FASE 1: OPTIMIZACIÓN INDIVIDUAL POR SÍMBOLO - PARALELO")
+print("🔍 PHASE 1: INDIVIDUAL OPTIMIZATION BY SYMBOL - PARALLEL")
 print("="*100)
 
-individual_results = []
-
-with ThreadPoolExecutor(max_workers=2) as executor:  # 2 workers para análisis
-    future_to_symbol = {
-        executor.submit(analyze_symbol_individual, symbol, rsi_data, vwap_data): symbol 
-        for symbol in STOCKS if symbol in rsi_data and symbol in vwap_data
-    }
-    
-    # Recoger resultados
-    for future in as_completed(future_to_symbol):
-        symbol = future_to_symbol[future]
+# Parallel analysis for each symbol (RSI and VWAP simultaneously)
+with ThreadPoolExecutor(max_workers=2) as executor:  # 2 workers for analysis
+    individual_results = []
+    for symbol in STOCKS:
         try:
-            result = future.result()
-            if result:
-                individual_results.append(result)
+            future = executor.submit(analyze_symbol_individual, symbol, rsi_data, vwap_data)
+            individual_results.append((symbol, future))
         except Exception as e:
-            print(f"   ❌ Error en análisis individual {symbol}: {e}")
+            print(f"   ❌ Error in individual analysis {symbol}: {e}")
 
-print(f"\n{'='*100}")
-print("📊 REPORTE FASE 1: OPTIMIZACIÓN INDIVIDUAL")
-print("="*100)
-print(f"{'Symbol':<8} {'Winner':<8} {'RSI Return':<12} {'VWAP Return':<12} {'RSI Sharpe':<12} {'VWAP Sharpe':<12}")
-print("-"*70)
+# Collect results
+print("📊 PHASE 1 REPORT: INDIVIDUAL OPTIMIZATION")
+final_individual_results = []
 
-for res in individual_results:
-    rsi_ret = res['rsi']['total_return'] if res['rsi'] else 0
-    vwap_ret = res['vwap']['total_return'] if res['vwap'] else 0
-    rsi_sharpe = res['rsi']['sharpe_ratio'] if res['rsi'] else 0
-    vwap_sharpe = res['vwap']['sharpe_ratio'] if res['vwap'] else 0
-    print(f"{res['symbol']:<8} {res['winner']:<8} {rsi_ret:<11.2%} {vwap_ret:<11.2%} {rsi_sharpe:<11.2f} {vwap_sharpe:<11.2f}")
+for symbol, future in individual_results:
+    try:
+        res = future.result()
+        if res is not None:  # Check if result is valid
+            final_individual_results.append(res)
+            rsi_ret = res['rsi']['total_return'] if res['rsi'] else 0
+            vwap_ret = res['vwap']['total_return'] if res['vwap'] else 0
+            winner = 'RSI' if rsi_ret > vwap_ret else 'VWAP'
+            print(f"   {symbol}: {winner} wins (RSI: {rsi_ret:.2%}, VWAP: {vwap_ret:.2%})")
+        else:
+            print(f"   {symbol}: Analysis failed - no valid data")
+    except Exception as e:
+        print(f"   ❌ Error processing results for {symbol}: {e}")
 
 print("\n" + "="*100)
-print("🕒 FASE 2: ANÁLISIS MULTI-TIMEFRAME - PARALELO")
+print("🕒 PHASE 2: MULTI-TIMEFRAME ANALYSIS - PARALLEL")
 print("="*100)
 
-all_results = []
-
-with ThreadPoolExecutor(max_workers=2) as executor:  # 2 workers para multi-timeframe
-    future_to_symbol = {
-        executor.submit(analyze_symbol_multiframe, symbol, rsi_data, vwap_data): symbol 
-        for symbol in STOCKS if symbol in rsi_data and symbol in vwap_data
-    }
-    
-    # Recoger resultados
-    for future in as_completed(future_to_symbol):
-        symbol = future_to_symbol[future]
+# Phase 2: Multi-timeframe analysis in parallel
+with ThreadPoolExecutor(max_workers=len(STOCKS)) as executor:
+    multi_tf_futures = []
+    for symbol in STOCKS:
         try:
-            result = future.result()
-            if result:
-                all_results.append(result)
+            future = executor.submit(analyze_symbol_multiframe, symbol, rsi_data, vwap_data)
+            multi_tf_futures.append((symbol, future))
         except Exception as e:
-            print(f"   ❌ Error en multi-timeframe {symbol}: {e}")
+            print(f"   ❌ Error in multi-timeframe analysis {symbol}: {e}")
 
-for res in all_results:
-    print(f"\n🏆 RESULTADO MULTI-TIMEFRAME {res['symbol']}:")
-    print(f"   Ganador: {res['winner']}")
-    print(f"   RSI Avg Return: {res['rsi']['avg_metrics']['total_return']:.2%}")
-    print(f"   VWAP Avg Return: {res['vwap']['avg_metrics']['total_return']:.2%}")
-    print(f"   RSI Avg Sharpe: {res['rsi']['avg_metrics']['sharpe_ratio']:.2f}")
-    print(f"   VWAP Avg Sharpe: {res['vwap']['avg_metrics']['sharpe_ratio']:.2f}")
-    print(f"   RSI Avg Calmar: {res['rsi']['avg_metrics']['calmar_ratio']:.2f}")
-    print(f"   VWAP Avg Calmar: {res['vwap']['avg_metrics']['calmar_ratio']:.2f}")
-    print(f"   RSI Avg Sortino: {res['rsi']['avg_metrics']['sortino_ratio']:.2f}")
-    print(f"   VWAP Avg Sortino: {res['vwap']['avg_metrics']['sortino_ratio']:.2f}")
-    print(f"   RSI Avg Win Rate: {res['rsi']['avg_metrics']['win_rate']:.2%}")
-    print(f"   VWAP Avg Win Rate: {res['vwap']['avg_metrics']['win_rate']:.2%}")
-    print(f"   RSI Avg Max DD: {res['rsi']['avg_metrics']['max_drawdown']:.2%}")
-    print(f"   VWAP Avg Max DD: {res['vwap']['avg_metrics']['max_drawdown']:.2%}")
+# Collect multi-timeframe results
+final_multi_tf_results = []
+for symbol, future in multi_tf_futures:
+    try:
+        res = future.result()
+        if res is not None:  # Check if result is valid
+            final_multi_tf_results.append(res)
+            if res['rsi'] and res['vwap']:
+                print(f"   {symbol} Multi-TF completed:")
+                print(f"   RSI Avg Return: {res['rsi']['avg_metrics']['total_return']:.2%}")
+                print(f"   VWAP Avg Return: {res['vwap']['avg_metrics']['total_return']:.2%}")
+            else:
+                print(f"   {symbol}: Analysis completed but missing data")
+        else:
+            print(f"   {symbol}: Multi-timeframe analysis failed")
+    except Exception as e:
+        print(f"   ❌ Error processing multi-timeframe results for {symbol}: {e}")
 
-print("\n" + "="*100)
-print("🏆 REPORTE FINAL MULTI-TIMEFRAME")
-print("="*100)
-print(f"{'Symbol':<8} {'Winner':<8} {'RSI Ret':<10} {'VWAP Ret':<10} {'RSI Sharpe':<10} {'VWAP Sharpe':<10} {'RSI Calmar':<10} {'VWAP Calmar':<10} {'RSI Sortino':<10} {'VWAP Sortino':<10} {'RSI Win':<10} {'VWAP Win':<10}")
-print("-"*140)
-for res in all_results:
-    print(f"{res['symbol']:<8} {res['winner']:<8} {res['rsi']['avg_metrics']['total_return']:<9.2%} {res['vwap']['avg_metrics']['total_return']:<9.2%} {res['rsi']['avg_metrics']['sharpe_ratio']:<10.2f} {res['vwap']['avg_metrics']['sharpe_ratio']:<10.2f} {res['rsi']['avg_metrics']['calmar_ratio']:<10.2f} {res['vwap']['avg_metrics']['calmar_ratio']:<10.2f} {res['rsi']['avg_metrics']['sortino_ratio']:<10.2f} {res['vwap']['avg_metrics']['sortino_ratio']:<10.2f} {res['rsi']['avg_metrics']['win_rate']:<9.2%} {res['vwap']['avg_metrics']['win_rate']:<9.2%}")
-print("="*100)
-print("🎯 ANÁLISIS MULTI-TIMEFRAME COMPLETADO")
-print("="*100) 
+# Final comparison
+print("🏆 FINAL MULTI-TIMEFRAME REPORT")
+print(f"{'Symbol':<8} {'Winner':<8} {'RSI Ret':<9} {'VWAP Ret':<10} {'RSI Sharpe':<10} {'VWAP Sharpe':<11} {'RSI Calmar':<10} {'VWAP Calmar':<11}")
+print("-" * 90)
+
+for res in final_multi_tf_results:
+    if res['rsi'] and res['vwap']:
+        print(f"{res['symbol']:<8} {res['winner']:<8} {res['rsi']['avg_metrics']['total_return']:<9.2%} {res['vwap']['avg_metrics']['total_return']:<9.2%} {res['rsi']['avg_metrics']['sharpe_ratio']:<10.2f} {res['vwap']['avg_metrics']['sharpe_ratio']:<10.2f} {res['rsi']['avg_metrics']['calmar_ratio']:<10.2f} {res['vwap']['avg_metrics']['calmar_ratio']:<10.2f}")
+
+print("✅ MULTI-TIMEFRAME ANALYSIS COMPLETED") 
