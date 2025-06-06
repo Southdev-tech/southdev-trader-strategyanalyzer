@@ -52,7 +52,7 @@ vbt.AlpacaData.set_custom_settings(
     )
 )
 
-def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30, exit_level=75, show_warnings=True):
+def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30, exit_level=75, show_warnings=True, take_profit=0.03, stop_loss=0.05):
     try:
         rsi = vbt.RSI.run(price_data, window=rsi_window)
         
@@ -99,8 +99,8 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
             entries,
             exits,
             init_cash=INITIAL_CAPITAL,
-            sl_stop=0.05,
-            tp_stop=0.03,
+            sl_stop=stop_loss,
+            tp_stop=take_profit,
             accumulate=False,
         )
 
@@ -150,6 +150,8 @@ def test_rsi_strategy_on_stock(price_data, symbol, rsi_window=20, entry_level=30
             'rsi_window': rsi_window,
             'entry_level': entry_level,
             'exit_level': exit_level,
+            'take_profit': take_profit,
+            'stop_loss': stop_loss,
             'total_return': total_return,
             'sharpe_ratio': sharpe_ratio if not pd.isna(sharpe_ratio) else 0,
             'max_drawdown': max_drawdown if not pd.isna(max_drawdown) else 0,
@@ -173,36 +175,40 @@ def optimize_rsi_for_stock(price_data, symbol):
     rsi_windows = np.arange(10, 25, 2)      # RSI windows: 10, 12, 14, 16, 18, 20, 22, 24
     entry_levels = np.arange(20, 40, 5)     # Entry levels: 20, 25, 30, 35
     exit_levels = np.arange(60, 85, 5)      # Exit levels: 60, 65, 70, 75, 80
+    take_profits = np.arange(0.01, 0.05, 0.01)  # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
+    stop_losses = np.arange(0.01, 0.05, 0.01)  # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
 
     best_return = -np.inf
     best_params = None
     all_results = []
 
-    total_combinations = len(rsi_windows) * len(entry_levels) * len(exit_levels)
+    total_combinations = len(rsi_windows) * len(entry_levels) * len(exit_levels) * len(take_profits) * len(stop_losses)
     current_combination = 0
     warning_shown = False
 
     for rsi_window in rsi_windows:
         for entry_level in entry_levels:
             for exit_level in exit_levels:
-                current_combination += 1
+                for take_profit in take_profits:
+                    for stop_loss in stop_losses:
+                        current_combination += 1
 
-                if entry_level >= exit_level:
-                    continue
+                        if entry_level >= exit_level:
+                            continue
 
-                # Only show warnings for the first combination to avoid spam
-                show_warnings = not warning_shown
-                result = test_rsi_strategy_on_stock(price_data, symbol, rsi_window, entry_level, exit_level, show_warnings)
-                warning_shown = True
+                        # Only show warnings for the first combination to avoid spam
+                        show_warnings = not warning_shown
+                        result = test_rsi_strategy_on_stock(price_data, symbol, rsi_window, entry_level, exit_level, show_warnings, take_profit, stop_loss)
+                        warning_shown = True
 
-                if result:
-                    all_results.append(result)
-                    if result['total_return'] > best_return:
-                        best_return = result['total_return']
-                        best_params = result.copy()
+                        if result:
+                            all_results.append(result)
+                            if result['total_return'] > best_return:
+                                best_return = result['total_return']
+                                best_params = result.copy()
 
-                if current_combination % 20 == 0:
-                    print(f"   Progress: {current_combination}/{total_combinations} combinations tested...")
+                        if current_combination % 20 == 0:
+                            print(f"   Progress: {current_combination}/{total_combinations} combinations tested...")
 
     print(f"   ✅ Completed: {len(all_results)} valid configurations tested")
     return best_params, all_results
@@ -539,6 +545,8 @@ if optimization_results:
     print(f"   Configuration: RSI={best_overall['rsi_window']}, Entry={best_overall['entry_level']}, Exit={best_overall['exit_level']}")
     print(f"   Return: {best_overall['total_return']:.2%}")
     print(f"   Profit: ${best_overall['profit']:.2f}")
+    print(f"   Take Profit: {best_overall['take_profit']:.2%}")
+    print(f"   Stop Loss: {best_overall['stop_loss']:.2%}")
 
     profitable_stocks = [r for r in optimization_results if r['total_return'] > 0]
     print(f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}")

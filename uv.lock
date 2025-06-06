@@ -1086,7 +1086,7 @@ requires-dist = [
     { name = "schedule", specifier = ">=1.1.0" },
     { name = "ta-lib", specifier = ">=0.4.0" },
     { name = "tqdm", specifier = ">=4.60.0" },
-    { name = "vectorbtpro", git = "ssh://****@github.com/Southdev-tech/vectorbt.pro" },
+    { name = "vectorbtpro", git = "ssh://git@github.com/Southdev-tech/vectorbt.pro" },
     { name = "yfinance", specifier = ">=0.2.0" },
 ]
 provides-extras = ["dev"]

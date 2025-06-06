@@ -63,7 +63,7 @@ def calculate_vwap(data):
         print(f"Error calculating VWAP: {e}")
         return None
 
-def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_threshold=0.015, show_warnings=True):
+def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_threshold=0.015, show_warnings=True, take_profit=0.03, stop_loss=0.05):
     try:
         close_price = data.get('Close')
         vwap = calculate_vwap(data)
@@ -120,8 +120,8 @@ def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_thresho
             entries,
             exits,
             init_cash=INITIAL_CAPITAL,
-            sl_stop=0.05,
-            tp_stop=0.03,
+            sl_stop=stop_loss,
+            tp_stop=take_profit,
             accumulate=False,
         )
         
@@ -171,6 +171,8 @@ def test_vwap_strategy_on_stock(data, symbol, entry_threshold=0.02, exit_thresho
             'entry_threshold': entry_threshold,
             'exit_threshold': exit_threshold,
             'total_return': total_return,
+            'take_profit': take_profit,
+            'stop_loss': stop_loss,
             'sharpe_ratio': sharpe_ratio if not pd.isna(sharpe_ratio) else 0,
             'max_drawdown': max_drawdown if not pd.isna(max_drawdown) else 0,
             'win_rate': win_rate if not pd.isna(win_rate) else 0,
@@ -192,35 +194,39 @@ def optimize_vwap_for_stock(ohlcv_data, symbol):
 
     entry_thresholds = np.arange(0.002, 0.015, 0.002)    # Entry: 0.2%, 0.4%, 0.6%, 0.8%, 1.0%, 1.2%, 1.4%
     exit_thresholds = np.arange(0.001, 0.01, 0.001)      # Exit thresholds: 0.5%, 1.0%, 1.5%, 2.0%, 2.5%
+    take_profits = np.arange(0.01, 0.05, 0.01)  # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
+    stop_losses = np.arange(0.01, 0.05, 0.01)  # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
 
     best_return = -np.inf
     best_params = None
     all_results = []
 
-    total_combinations = len(entry_thresholds) * len(exit_thresholds)
+    total_combinations = len(entry_thresholds) * len(exit_thresholds) * len(take_profits) * len(stop_losses)
     current_combination = 0
     warning_shown = False
 
     for entry_threshold in entry_thresholds:
         for exit_threshold in exit_thresholds:
-            current_combination += 1
+            for take_profit in take_profits:
+                for stop_loss in stop_losses:
+                    current_combination += 1
 
-            if entry_threshold <= exit_threshold:
-                continue
+                    if entry_threshold <= exit_threshold:
+                        continue
 
-            # Only show warnings for the first combination to avoid spam
-            show_warnings = not warning_shown
-            result = test_vwap_strategy_on_stock(ohlcv_data, symbol, entry_threshold, exit_threshold, show_warnings)
-            warning_shown = True
+                    # Only show warnings for the first combination to avoid spam
+                    show_warnings = not warning_shown
+                    result = test_vwap_strategy_on_stock(ohlcv_data, symbol, entry_threshold, exit_threshold, show_warnings, take_profit, stop_loss)
+                    warning_shown = True
 
-            if result:
-                all_results.append(result)
-                if result['total_return'] > best_return:
-                    best_return = result['total_return']
-                    best_params = result.copy()
+                    if result:
+                        all_results.append(result)
+                        if result['total_return'] > best_return:
+                            best_return = result['total_return']
+                            best_params = result.copy()
 
-            if current_combination % 5 == 0:
-                print(f"   Progress: {current_combination}/{total_combinations} combinations tested...")
+                    if current_combination % 5 == 0:
+                        print(f"   Progress: {current_combination}/{total_combinations} combinations tested...")
 
     print(f"   ✅ Completed: {len(all_results)} valid configurations tested")
     return best_params, all_results
@@ -590,6 +596,8 @@ if optimization_results:
     print(f"   Configuration: Entry={best_overall['entry_threshold']*100:.1f}%, Exit={best_overall['exit_threshold']*100:.1f}%")
     print(f"   Return: {best_overall['total_return']:.2%}")
     print(f"   Profit: ${best_overall['profit']:.2f}")
+    print(f"   Take Profit: {best_overall['take_profit']:.2%}")
+    print(f"   Stop Loss: {best_overall['stop_loss']:.2%}")
     
     profitable_stocks = [r for r in optimization_results if r['total_return'] > 0]
     print(f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}")
