@@ -5,7 +5,7 @@ description = "Automated Trading Backtesting Module using VectorBT"
 readme = "README.md"
 requires-python = ">=3.9,<3.10"
 dependencies = [
-    "vectorbtpro @ git+https://github.com/Southdev-tech/vectorbt.pro.git",
+    "vectorbtpro @ git+ssh://git@github.com/Southdev-tech/vectorbt.pro",
     "pandas>=1.3.0,<2.3.0",
     "numpy>=1.21.0,<1.25.0",
     "matplotlib>=3.4.0,<3.8.0",
@@ -22,9 +22,10 @@ dependencies = [
     "tqdm>=4.60.0",
     "beautifulsoup4>=4.9.0",
     "curl-cffi>=0.5.0",
-    "numba>=0.56.0,<0.58.0",
-    "llvmlite>=0.39.0,<0.41.0",
     "alpaca-py>=0.40.0",
+    "python-dotenv>=1.1.0",
+    "numba==0.56.4",
+    "llvmlite==0.39.1",
 ]
 
 [project.optional-dependencies]

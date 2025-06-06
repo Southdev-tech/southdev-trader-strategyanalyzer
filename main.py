@@ -113,8 +113,8 @@ def get_vwap_param_grid(symbol):
         entry_thresholds = np.arange(0.0005, 0.0025, 0.0003)
         exit_thresholds = np.arange(0.0002, 0.0018, 0.0003)
     else:
-        entry_thresholds = np.arange(0.002, 0.014, 0.002)
-        exit_thresholds = np.arange(0.001, 0.009, 0.001)
+        entry_thresholds = np.arange(0.002, 0.014, 0.0005)
+        exit_thresholds = np.arange(0.001, 0.009, 0.0005)
     grid = []
     for entry_threshold in entry_thresholds:
         for exit_threshold in exit_thresholds:

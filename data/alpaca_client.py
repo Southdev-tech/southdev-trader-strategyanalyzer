@@ -1,5 +1,9 @@
 import vectorbtpro as vbt
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 vbt.AlpacaData.set_custom_settings(
     client_config=dict(
@@ -24,7 +28,7 @@ def download_stock_data(symbol, start_date, end_date, strategy):
     """
     try:
         # Download trades once
-        print(f"   📡 Downloading trades for {symbol} ({strategy})...")
+        print(f"⏳ Downloading trades for {symbol} ({strategy})...")
         data = vbt.AlpacaData.pull(
             symbol,
             start=start_date,
@@ -77,8 +81,8 @@ def convert_trades_to_ohlcv_unified(trade_data, symbol, timeframe='4S'):
             return None
         
         timeframe_name = "1-minute" if timeframe == '1T' else "4-second"
-        print(f"   📊 Converting {len(df)} trades to {timeframe_name} OHLCV for {symbol}")
-        print(f"   📋 Trade data columns: {list(df.columns)}")
+        print(f"📊 Converting {len(df)} trades to {timeframe_name} OHLCV for {symbol}")
+        print(f"📋 Trade data columns: {list(df.columns)}")
         
         price_col = None
         volume_col = None
@@ -103,7 +107,7 @@ def convert_trades_to_ohlcv_unified(trade_data, symbol, timeframe='4S'):
             print(f"   Available columns: {list(df.columns)}")
             return None
         
-        print(f"   ✓ Using price column: '{price_col}', volume column: '{volume_col}'")
+        print(f"✓ Using price column: '{price_col}', volume column: '{volume_col}'")
         
         # Prepare data for resampling
         df_trades = df[[price_col, volume_col]].copy()
@@ -122,7 +126,7 @@ def convert_trades_to_ohlcv_unified(trade_data, symbol, timeframe='4S'):
             print(f"❌ No OHLCV data generated for {symbol}")
             return None
         
-        print(f"   ✅ Generated {len(ohlcv)} {timeframe_name} OHLCV bars from {len(df)} trades")
+        print(f"✅ Generated {len(ohlcv)} {timeframe_name} OHLCV bars from {len(df)} trades")
         
         class OHLCVData:
             def __init__(self, dataframe):
@@ -335,7 +339,7 @@ def download_stock_data_both(symbol, start_date, end_date):
     """
     try:
         # Download trades once
-        print(f"   📡 Downloading trades for {symbol} (RSI + VWAP)...")
+        print(f"⏳ Downloading trades for {symbol} (RSI + VWAP)...")
         data = vbt.AlpacaData.pull(
             symbol,
             start=start_date,
