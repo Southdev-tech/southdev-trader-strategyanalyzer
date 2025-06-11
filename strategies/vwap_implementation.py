@@ -186,12 +186,12 @@ def optimize_vwap_for_stock(ohlcv_data, symbol, initial_capital: int = None):
 
     # Entry: 0.2%, 0.4%, 0.6%, 0.8%, 1.0%, 1.2%, 1.4%
     entry_thresholds = np.arange(0.002, 0.015, 0.002)
-    # Exit thresholds: 0.5%, 1.0%, 1.5%, 2.0%, 2.5%
+    # Exit thresholds: 0.1%, 0.2%, 0.3%, 0.4%, 0.5%, 0.6%, 0.7%, 0.8%, 0.9%
     exit_thresholds = np.arange(0.001, 0.01, 0.001)
-    # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
-    take_profits = np.arange(0.01, 0.05, 0.01)
-    # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
-    stop_losses = np.arange(0.01, 0.05, 0.01)
+    # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05 (fixed range)
+    take_profits = np.arange(0.01, 0.051, 0.01)
+    # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05 (fixed range)
+    stop_losses = np.arange(0.01, 0.051, 0.01)
 
     best_return = -np.inf
     best_params = None

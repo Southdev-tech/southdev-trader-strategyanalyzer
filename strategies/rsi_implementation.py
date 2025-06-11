@@ -163,10 +163,10 @@ def optimize_rsi_for_stock(price_data, symbol, initial_capital):
     rsi_windows = np.arange(10, 25, 2)
     entry_levels = np.arange(20, 40, 5)  # Entry levels: 20, 25, 30, 35
     exit_levels = np.arange(60, 85, 5)  # Exit levels: 60, 65, 70, 75, 80
-    # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
-    take_profits = np.arange(0.01, 0.05, 0.01)
-    # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
-    stop_losses = np.arange(0.01, 0.05, 0.01)
+    # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05 (fixed range)
+    take_profits = np.arange(0.01, 0.051, 0.01)  # Fixed: now includes 0.05
+    # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05 (fixed range)
+    stop_losses = np.arange(0.01, 0.051, 0.01)  # Fixed: now includes 0.05
 
     best_return = -np.inf
     best_params = None
@@ -481,10 +481,9 @@ def plot_best_strategy(price_data, symbol, best_params):
 
 def optimize_single_stock(symbol_data_tuple):
     """Helper function to optimize a single stock - designed for parallel processing"""
-    symbol, price_data = symbol_data_tuple
-    initial_capital = 5000  # Use the same initial capital as main
+    symbol, price_data, initial_capital = symbol_data_tuple
 
-    print(f"🔍 Starting optimization for {symbol}...")
+    print(f"🔍 Starting optimization for {symbol} with capital ${initial_capital:,}...")
     best_params, all_results = optimize_rsi_for_stock(price_data, symbol, initial_capital=initial_capital)
 
     if best_params:
@@ -621,7 +620,7 @@ if __name__ == "__main__":
     with ProcessPoolExecutor(max_workers=min(len(stock_data), 4)) as executor:
         # Submit all optimization tasks
         future_to_symbol = {
-            executor.submit(optimize_single_stock, (symbol, price_data)): symbol
+            executor.submit(optimize_single_stock, (symbol, price_data, INITIAL_CAPITAL)): symbol
             for symbol, price_data in stock_data.items()
         }
 
