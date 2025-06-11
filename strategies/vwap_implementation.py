@@ -40,7 +40,7 @@ def print_separator(char="-"):
 
 # Configuration constants
 INITIAL_CAPITAL = 20000  # Single source of truth for initial capital
-STOCKS = ['SATL']
+STOCKS = ['EVLV']
 
 end_date = datetime.datetime.now()
 start_date = end_date - datetime.timedelta(days=10)
@@ -512,99 +512,100 @@ def show_detailed_trades(optimization_results):
             
         print_separator()
 
-print_header("VWAP PARAMETER OPTIMIZATION - ANALYSIS WITH TRADES DATA")
-print("📊 Downloading individual trades data and converting to 4-second OHLCV bars")
-print("🤖 Simulating real-time bot analysis with trades data")
-print_separator("=")
-
-stock_data = {}
-for symbol in STOCKS:
-    print(f"Downloading trades data for {symbol}...")
-    data = download_stock_data_vwap(symbol, start_date, end_date)
-    if data is not None:
-        stock_data[symbol] = data
-        close_data = data.get('Close')
-        print(f"✓ {symbol}: {len(close_data)} 4-second OHLCV bars generated from trades")
-    else:
-        print(f"✗ {symbol}: Unable to get trades data")
-
-print(f"\n✅ Trades data processed successfully for {len(stock_data)} stocks")
-print(f"🔄 Converted to 4-second OHLCV bars for VWAP analysis")
-
-optimization_results = []
-
-for symbol, data in stock_data.items():
+if __name__ == "__main__":
+    print_header("VWAP PARAMETER OPTIMIZATION - ANALYSIS WITH TRADES DATA")
+    print("📊 Downloading individual trades data and converting to 4-second OHLCV bars")
+    print("🤖 Simulating real-time bot analysis with trades data")
     print_separator("=")
-    print(f"OPTIMIZING {symbol}".center(get_terminal_width()))
-    print_separator("=")
-    
-    best_params, all_results = optimize_vwap_for_stock(data, symbol)
-    
-    if best_params:
-        optimization_results.append(best_params)
+
+    stock_data = {}
+    for symbol in STOCKS:
+        print(f"Downloading trades data for {symbol}...")
+        data = download_stock_data_vwap(symbol, start_date, end_date)
+        if data is not None:
+            stock_data[symbol] = data
+            close_data = data.get('Close')
+            print(f"✓ {symbol}: {len(close_data)} 4-second OHLCV bars generated from trades")
+        else:
+            print(f"✗ {symbol}: Unable to get trades data")
+
+    print(f"\n✅ Trades data processed successfully for {len(stock_data)} stocks")
+    print(f"🔄 Converted to 4-second OHLCV bars for VWAP analysis")
+
+    optimization_results = []
+
+    for symbol, data in stock_data.items():
+        print_separator("=")
+        print(f"OPTIMIZING {symbol}".center(get_terminal_width()))
+        print_separator("=")
         
-        print(f"\n🏆 BEST CONFIGURATION FOR {symbol}:")
-        print(f"   Entry Threshold: {best_params['entry_threshold']*100:.1f}%")
-        print(f"   Exit Threshold: {best_params['exit_threshold']*100:.1f}%")
-        print(f"   Total Return: {best_params['total_return']:.2%}")
-        print(f"   Sharpe Ratio: {best_params['sharpe_ratio']:.2f}")
-        print(f"   Max Drawdown: {best_params['max_drawdown']:.2%}")
-        print(f"   Win Rate: {best_params['win_rate']:.1%}")
-        print(f"   Number of Trades: {best_params['num_trades']}")
-        print(f"   Entry Signals: {best_params['num_entries']}")
-        print(f"   Exit Signals: {best_params['num_exits']}")
-        print(f"   Initial Capital: ${best_params['initial_capital']:,.2f}")
-        print(f"   Final Capital: ${best_params['final_capital']:,.2f}")
-        print(f"   Profit: ${best_params['profit']:,.2f}")
+        best_params, all_results = optimize_vwap_for_stock(data, symbol)
         
-        if len(all_results) > 1:
-            sorted_results = sorted(all_results, key=lambda x: x['total_return'], reverse=True)[:5]
-            print(f"\n📊 TOP 5 CONFIGURATIONS FOR {symbol}:")
-            width = get_terminal_width()
-            print(f"{'Rank':<5} {'Entry%':<8} {'Exit%':<7} {'Return':<10} {'Profit':<12} {'Trades':<8}")
-            print_separator()
-            for i, result in enumerate(sorted_results, 1):
-                print(f"{i:<5} {result['entry_threshold']*100:<7.1f} {result['exit_threshold']*100:<6.1f} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['num_trades']:<8}")
+        if best_params:
+            optimization_results.append(best_params)
+            
+            print(f"\n🏆 BEST CONFIGURATION FOR {symbol}:")
+            print(f"   Entry Threshold: {best_params['entry_threshold']*100:.1f}%")
+            print(f"   Exit Threshold: {best_params['exit_threshold']*100:.1f}%")
+            print(f"   Total Return: {best_params['total_return']:.2%}")
+            print(f"   Sharpe Ratio: {best_params['sharpe_ratio']:.2f}")
+            print(f"   Max Drawdown: {best_params['max_drawdown']:.2%}")
+            print(f"   Win Rate: {best_params['win_rate']:.1%}")
+            print(f"   Number of Trades: {best_params['num_trades']}")
+            print(f"   Entry Signals: {best_params['num_entries']}")
+            print(f"   Exit Signals: {best_params['num_exits']}")
+            print(f"   Initial Capital: ${best_params['initial_capital']:,.2f}")
+            print(f"   Final Capital: ${best_params['final_capital']:,.2f}")
+            print(f"   Profit: ${best_params['profit']:,.2f}")
+            
+            if len(all_results) > 1:
+                sorted_results = sorted(all_results, key=lambda x: x['total_return'], reverse=True)[:5]
+                print(f"\n📊 TOP 5 CONFIGURATIONS FOR {symbol}:")
+                width = get_terminal_width()
+                print(f"{'Rank':<5} {'Entry%':<8} {'Exit%':<7} {'Return':<10} {'Profit':<12} {'Trades':<8}")
+                print_separator()
+                for i, result in enumerate(sorted_results, 1):
+                    print(f"{i:<5} {result['entry_threshold']*100:<7.1f} {result['exit_threshold']*100:<6.1f} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['num_trades']:<8}")
+            
+            print(f"\n📈 Generating graph for {symbol}...")
+            plot_best_strategy(data, symbol, best_params)
+            
+            show_detailed_trades([best_params])
+            
+        else:
+            print(f"❌ No valid configurations found for {symbol}")
+
+    print_header("FINAL SUMMARY - BEST CONFIGURATIONS BY STOCK")
+
+    if optimization_results:
+        optimization_results.sort(key=lambda x: x['total_return'], reverse=True)
         
-        print(f"\n📈 Generating graph for {symbol}...")
-        plot_best_strategy(data, symbol, best_params)
+        print(f"{'Stock':<8} {'Entry%':<8} {'Exit%':<7} {'Return':<10} {'Profit':<12} {'Sharpe':<8} {'Trades':<8}")
+        print_separator()
         
-        show_detailed_trades([best_params])
+        for result in optimization_results:
+            print(f"{result['symbol']:<8} {result['entry_threshold']*100:<7.1f} {result['exit_threshold']*100:<6.1f} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['sharpe_ratio']:<7.2f} {result['num_trades']:<8}")
         
+        best_overall = optimization_results[0]
+        print(f"\n🥇 BEST OVERALL STOCK: {best_overall['symbol']}")
+        print(f"   Configuration: Entry={best_overall['entry_threshold']*100:.1f}%, Exit={best_overall['exit_threshold']*100:.1f}%")
+        print(f"   Return: {best_overall['total_return']:.2%}")
+        print(f"   Profit: ${best_overall['profit']:.2f}")
+        
+        profitable_stocks = [r for r in optimization_results if r['total_return'] > 0]
+        print(f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}")
+        
+        if profitable_stocks:
+            avg_return = sum(r['total_return'] for r in profitable_stocks) / len(profitable_stocks)
+            avg_profit = sum(r['profit'] for r in profitable_stocks) / len(profitable_stocks)
+            total_profit = sum(r['profit'] for r in profitable_stocks)
+            print(f"📊 Average return (profitable stocks): {avg_return:.2%}")
+            print(f"💰 Average profit (profitable stocks): ${avg_profit:,.2f}")
+            print(f"💎 Total combined profit: ${total_profit:,.2f}")
+
+        show_detailed_trades(optimization_results)
+
     else:
-        print(f"❌ No valid configurations found for {symbol}")
+        print("❌ No valid configurations found for any stock")
 
-print_header("FINAL SUMMARY - BEST CONFIGURATIONS BY STOCK")
-
-if optimization_results:
-    optimization_results.sort(key=lambda x: x['total_return'], reverse=True)
-    
-    print(f"{'Stock':<8} {'Entry%':<8} {'Exit%':<7} {'Return':<10} {'Profit':<12} {'Sharpe':<8} {'Trades':<8}")
-    print_separator()
-    
-    for result in optimization_results:
-        print(f"{result['symbol']:<8} {result['entry_threshold']*100:<7.1f} {result['exit_threshold']*100:<6.1f} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['sharpe_ratio']:<7.2f} {result['num_trades']:<8}")
-    
-    best_overall = optimization_results[0]
-    print(f"\n🥇 BEST OVERALL STOCK: {best_overall['symbol']}")
-    print(f"   Configuration: Entry={best_overall['entry_threshold']*100:.1f}%, Exit={best_overall['exit_threshold']*100:.1f}%")
-    print(f"   Return: {best_overall['total_return']:.2%}")
-    print(f"   Profit: ${best_overall['profit']:.2f}")
-    
-    profitable_stocks = [r for r in optimization_results if r['total_return'] > 0]
-    print(f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}")
-    
-    if profitable_stocks:
-        avg_return = sum(r['total_return'] for r in profitable_stocks) / len(profitable_stocks)
-        avg_profit = sum(r['profit'] for r in profitable_stocks) / len(profitable_stocks)
-        total_profit = sum(r['profit'] for r in profitable_stocks)
-        print(f"📊 Average return (profitable stocks): {avg_return:.2%}")
-        print(f"💰 Average profit (profitable stocks): ${avg_profit:,.2f}")
-        print(f"💎 Total combined profit: ${total_profit:,.2f}")
-
-    show_detailed_trades(optimization_results)
-
-else:
-    print("❌ No valid configurations found for any stock")
-
-print_header("OPTIMIZATION COMPLETED")
+    print_header("OPTIMIZATION COMPLETED")
