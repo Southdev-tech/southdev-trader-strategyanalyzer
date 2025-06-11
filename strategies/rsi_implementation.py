@@ -1,29 +1,26 @@
-import sys
 import os
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from datetime import datetime, timedelta
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+import exchange_calendars as ecals
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import vectorbtpro as vbt
 from dotenv import load_dotenv
-from utils.terminal import print_header, print_separator, get_terminal_width
+from plotly.subplots import make_subplots
+
+from data.alpaca_client import download_stock_data
+from utils.terminal import get_terminal_width, print_header, print_separator
 
 load_dotenv()
 
-import vectorbtpro as vbt
-import datetime
-import pandas as pd
-import numpy as np
-import warnings
-import plotly.graph_objects as go
-import exchange_calendars as ecals
-from plotly.subplots import make_subplots
-from data.alpaca_client import download_stock_data_rsi
 
 warnings.filterwarnings("ignore")
 
 vbt.AlpacaData.set_custom_settings(
-    client_config=dict(
-        api_key=os.getenv("ALPACA_API_KEY"), secret_key=os.getenv("ALPACA_SECRET_KEY")
-    )
+    client_config=dict(api_key=os.getenv("ALPACA_API_KEY"), secret_key=os.getenv("ALPACA_SECRET_KEY"))
 )
 
 
@@ -36,7 +33,11 @@ def test_rsi_strategy_on_stock(
     show_warnings=True,
     take_profit=0.03,
     stop_loss=0.05,
+    initial_capital: int = 0,
 ):
+    if initial_capital <= 0:
+        raise ValueError("initial_capital must be a positive number")
+
     try:
         rsi = vbt.RSI.run(price_data, window=rsi_window)
 
@@ -44,16 +45,12 @@ def test_rsi_strategy_on_stock(
         calendar = ecals.get_calendar("XNYS")
 
         # Build valid trading sessions for your data range
-        sessions = calendar.sessions_in_range(
-            price_data.index.min().date(), price_data.index.max().date()
-        )
+        sessions = calendar.sessions_in_range(price_data.index.min().date(), price_data.index.max().date())
 
         # Fix holiday mask - convert sessions to date format that matches index
         sessions_dates = pd.to_datetime(sessions).date
         index_dates = price_data.index.date
-        holiday_mask = pd.Series(
-            [d in sessions_dates for d in index_dates], index=price_data.index
-        )
+        holiday_mask = pd.Series([d in sessions_dates for d in index_dates], index=price_data.index)
 
         # Create time mask - using between_time to get boolean mask
         time_mask = price_data.index.indexer_between_time("9:30", "16:00")
@@ -69,9 +66,7 @@ def test_rsi_strategy_on_stock(
         # If no valid trading times, skip time filtering for now
         if final_mask.sum() == 0:
             if show_warnings:
-                print(
-                    f"WARNING: No valid trading times found for {symbol}, using weekday filter only"
-                )
+                print(f"WARNING: No valid trading times found for {symbol}, using weekday filter only")
             final_mask = weekday_mask & holiday_mask
 
         entries = rsi.rsi_crossed_below(entry_level) & final_mask
@@ -84,10 +79,11 @@ def test_rsi_strategy_on_stock(
             price_data,
             entries,
             exits,
-            init_cash=INITIAL_CAPITAL,
+            init_cash=initial_capital,
             sl_stop=stop_loss,
             tp_stop=take_profit,
             accumulate=False,
+            kwargs={"engine": "threadpool", "n_chunks": "auto"},
         )
 
         try:
@@ -105,26 +101,12 @@ def test_rsi_strategy_on_stock(
             total_return = (
                 stats_dict.get("Total Return [%]", 0) / 100
                 if "Total Return [%]" in stats_dict
-                else (
-                    pf.value.iloc[-1] / pf.value.iloc[0] - 1 if len(pf.value) > 0 else 0
-                )
+                else (pf.value.iloc[-1] / pf.value.iloc[0] - 1 if len(pf.value) > 0 else 0)
             )
-            sharpe_ratio = (
-                stats_dict.get("Sharpe Ratio", 0) if "Sharpe Ratio" in stats_dict else 0
-            )
-            max_drawdown = (
-                stats_dict.get("Max Drawdown [%]", 0) / 100
-                if "Max Drawdown [%]" in stats_dict
-                else 0
-            )
-            num_trades = (
-                stats_dict.get("Total Trades", 0) if "Total Trades" in stats_dict else 0
-            )
-            win_rate = (
-                stats_dict.get("Win Rate [%]", 0) / 100
-                if "Win Rate [%]" in stats_dict
-                else 0
-            )
+            sharpe_ratio = stats_dict.get("Sharpe Ratio", 0) if "Sharpe Ratio" in stats_dict else 0
+            max_drawdown = stats_dict.get("Max Drawdown [%]", 0) / 100 if "Max Drawdown [%]" in stats_dict else 0
+            num_trades = stats_dict.get("Total Trades", 0) if "Total Trades" in stats_dict else 0
+            win_rate = stats_dict.get("Win Rate [%]", 0) / 100 if "Win Rate [%]" in stats_dict else 0
 
             initial_capital = pf.init_cash
             final_capital = pf.value.iloc[-1] if len(pf.value) > 0 else initial_capital
@@ -134,17 +116,11 @@ def test_rsi_strategy_on_stock(
             print(f"Error getting stats for {symbol}: {e}")
             # Fallback calculations
             try:
-                initial_capital = (
-                    pf.init_cash if hasattr(pf, "init_cash") else INITIAL_CAPITAL
-                )
-                final_capital = (
-                    pf.value.iloc[-1] if len(pf.value) > 0 else initial_capital
-                )
-                total_return = (
-                    (final_capital / initial_capital) - 1 if initial_capital > 0 else 0
-                )
+                initial_capital = pf.init_cash if hasattr(pf, "init_cash") else INITIAL_CAPITAL
+                final_capital = pf.value.iloc[-1] if len(pf.value) > 0 else initial_capital
+                total_return = (final_capital / initial_capital) - 1 if initial_capital > 0 else 0
                 profit = final_capital - initial_capital
-            except:
+            except BaseException:
                 initial_capital = INITIAL_CAPITAL
                 final_capital = INITIAL_CAPITAL
                 total_return = 0
@@ -180,30 +156,23 @@ def test_rsi_strategy_on_stock(
         return None
 
 
-def optimize_rsi_for_stock(price_data, symbol):
+def optimize_rsi_for_stock(price_data, symbol, initial_capital):
     print(f"\n🔍Optimizing RSI parameters for {symbol}...")
 
-    rsi_windows = np.arange(10, 25, 2)  # RSI windows: 10, 12, 14, 16, 18, 20, 22, 24
+    # RSI windows: 10, 12, 14, 16, 18, 20, 22, 24
+    rsi_windows = np.arange(10, 25, 2)
     entry_levels = np.arange(20, 40, 5)  # Entry levels: 20, 25, 30, 35
     exit_levels = np.arange(60, 85, 5)  # Exit levels: 60, 65, 70, 75, 80
-    take_profits = np.arange(
-        0.01, 0.05, 0.01
-    )  # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
-    stop_losses = np.arange(
-        0.01, 0.05, 0.01
-    )  # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
+    # Take profits: 0.01, 0.02, 0.03, 0.04, 0.05
+    take_profits = np.arange(0.01, 0.05, 0.01)
+    # Stop losses: 0.01, 0.02, 0.03, 0.04, 0.05
+    stop_losses = np.arange(0.01, 0.05, 0.01)
 
     best_return = -np.inf
     best_params = None
     all_results = []
 
-    total_combinations = (
-        len(rsi_windows)
-        * len(entry_levels)
-        * len(exit_levels)
-        * len(take_profits)
-        * len(stop_losses)
-    )
+    total_combinations = len(rsi_windows) * len(entry_levels) * len(exit_levels) * len(take_profits) * len(stop_losses)
     current_combination = 0
     warning_shown = False
 
@@ -217,7 +186,8 @@ def optimize_rsi_for_stock(price_data, symbol):
                         if entry_level >= exit_level:
                             continue
 
-                        # Only show warnings for the first combination to avoid spam
+                        # Only show warnings for the first combination to avoid
+                        # spam
                         show_warnings = not warning_shown
                         result = test_rsi_strategy_on_stock(
                             price_data,
@@ -228,6 +198,7 @@ def optimize_rsi_for_stock(price_data, symbol):
                             show_warnings,
                             take_profit,
                             stop_loss,
+                            initial_capital,
                         )
                         warning_shown = True
 
@@ -239,10 +210,10 @@ def optimize_rsi_for_stock(price_data, symbol):
 
                         if current_combination % 20 == 0:
                             print(
-                                f"   Progress: {current_combination}/{total_combinations} combinations tested..."
+                                f"   Progress[{symbol}]: {current_combination}/{total_combinations} combinations tested"
                             )
 
-    print(f"   ✅ Completed: {len(all_results)} valid configurations tested")
+    print(f"   ✅ Completed[{symbol}]: {len(all_results)} valid configurations tested")
     return best_params, all_results
 
 
@@ -382,15 +353,9 @@ def plot_best_strategy(price_data, symbol, best_params):
                     pnl = float(trade["pnl"])
                     return_pct = float(trade["return"]) * 100
 
-                    entry_date = (
-                        pf.wrapper.index[entry_idx]
-                        if entry_idx < len(pf.wrapper.index)
-                        else "N/A"
-                    )
+                    entry_date = pf.wrapper.index[entry_idx] if entry_idx < len(pf.wrapper.index) else "N/A"
                     exit_date = (
-                        pf.wrapper.index[exit_idx]
-                        if exit_idx < len(pf.wrapper.index) and exit_idx >= 0
-                        else "Open"
+                        pf.wrapper.index[exit_idx] if exit_idx < len(pf.wrapper.index) and exit_idx >= 0 else "Open"
                     )
 
                     trade_details.append(
@@ -467,14 +432,8 @@ def plot_best_strategy(price_data, symbol, best_params):
                     cells=dict(
                         values=list(zip(*performance_metrics)),
                         fill_color=[
-                            [
-                                "lightblue" if i % 2 == 0 else "white"
-                                for i in range(len(performance_metrics))
-                            ],
-                            [
-                                "lightblue" if i % 2 == 0 else "white"
-                                for i in range(len(performance_metrics))
-                            ],
+                            ["lightblue" if i % 2 == 0 else "white" for i in range(len(performance_metrics))],
+                            ["lightblue" if i % 2 == 0 else "white" for i in range(len(performance_metrics))],
                         ],
                         align=["left", "right"],
                         font=dict(size=11, color="black", family="Arial"),
@@ -490,8 +449,12 @@ def plot_best_strategy(price_data, symbol, best_params):
         # Update layout with cleaner design
         fig.update_layout(
             title=dict(
-                text=f"<b>{symbol} - RSI Strategy Analysis</b><br>"
-                + f'<sub>Return: {best_params["total_return"]:.2%} | Profit: ${best_params["profit"]:.2f} | Trades: {best_params["num_trades"]}</sub>',
+                text=(
+                    f"<b>{symbol} - RSI Strategy Analysis</b><br>"
+                    f'<sub>Return: {best_params["total_return"]:.2%} | '
+                    f'Profit: ${best_params["profit"]:.2f} | '
+                    f'Trades: {best_params["num_trades"]}</sub>'
+                ),
                 x=0.5,
                 font=dict(size=18),
             ),
@@ -516,6 +479,22 @@ def plot_best_strategy(price_data, symbol, best_params):
         print(f"Error plotting enhanced strategy for {symbol}: {e}")
 
 
+def optimize_single_stock(symbol_data_tuple):
+    """Helper function to optimize a single stock - designed for parallel processing"""
+    symbol, price_data = symbol_data_tuple
+    initial_capital = 5000  # Use the same initial capital as main
+
+    print(f"🔍 Starting optimization for {symbol}...")
+    best_params, all_results = optimize_rsi_for_stock(price_data, symbol, initial_capital=initial_capital)
+
+    if best_params:
+        print(f"✅ Completed optimization for {symbol} - Return: {best_params['total_return']:.2%}")
+        return symbol, best_params, all_results, price_data
+    else:
+        print(f"❌ No valid configurations found for {symbol}")
+        return symbol, None, None, price_data
+
+
 def show_detailed_trades(optimization_results):
     """Show detailed trade information for each symbol"""
     print_separator("=")
@@ -528,7 +507,8 @@ def show_detailed_trades(optimization_results):
 
         print(f"🔍 DETAILED TRADES FOR {symbol}")
         print(
-            f"Configuration: RSI Window={result['rsi_window']}, Entry={result['entry_level']}, Exit={result['exit_level']}"
+            f"Configuration: RSI Window={result['rsi_window']}, "
+            f"Entry={result['entry_level']}, Exit={result['exit_level']}"
         )
         print_separator()
 
@@ -538,7 +518,8 @@ def show_detailed_trades(optimization_results):
             if len(trades) > 0:
                 print(f"📈 Total trades: {len(trades)}")
                 print(
-                    f"{'#':<3} {'Type':<6} {'Quantity':<12} {'Entry Date':<20} {'Entry Price':<15} {'Exit Date':<20} {'Exit Price':<15} {'PnL':<12} {'Return %':<10}"
+                    f"{'#':<3} {'Type':<6} {'Quantity':<12} {'Entry Date':<20} "
+                    f"{'Entry Price':<15} {'Exit Date':<20} {'Exit Price':<15} {'PnL':<12} {'Return %':<10}"
                 )
                 print_separator()
 
@@ -552,25 +533,19 @@ def show_detailed_trades(optimization_results):
                         size = float(trade["size"])
                         return_pct = float(trade["return"]) * 100
 
-                        entry_date = (
-                            pf.wrapper.index[entry_idx]
-                            if entry_idx < len(pf.wrapper.index)
-                            else "N/A"
-                        )
+                        entry_date = pf.wrapper.index[entry_idx] if entry_idx < len(pf.wrapper.index) else "N/A"
                         exit_date = (
-                            pf.wrapper.index[exit_idx]
-                            if exit_idx < len(pf.wrapper.index) and exit_idx >= 0
-                            else "Open"
+                            pf.wrapper.index[exit_idx] if exit_idx < len(pf.wrapper.index) and exit_idx >= 0 else "Open"
                         )
 
                         trade_type = "LONG" if size > 0 else "SHORT"
 
-                        exit_price_str = (
-                            f"${exit_price:.2f}" if exit_price > 0 else "Open"
-                        )
+                        exit_price_str = f"${exit_price:.2f}" if exit_price > 0 else "Open"
 
                         print(
-                            f"{i+1:<3} {trade_type:<6} {abs(size):<11.2f} {str(entry_date):<20} ${entry_price:<14.2f} {str(exit_date):<20} {exit_price_str:<15} ${pnl:<11.2f} {return_pct:<9.2f}%"
+                            f"{i+1:<3} {trade_type:<6} {abs(size):<11.2f} {str(entry_date):<20} "
+                            f"${entry_price:<14.2f} {str(exit_date):<20} {exit_price_str:<15} "
+                            f"${pnl:<11.2f} {return_pct:<9.2f}%"
                         )
 
                     except Exception as trade_error:
@@ -605,27 +580,29 @@ def show_detailed_trades(optimization_results):
 if __name__ == "__main__":
     # Configuration constants
     INITIAL_CAPITAL = 5000  # Single source of truth for initial capital
-    STOCKS = [
-        "TSLA",
-        "MSFT",
-        "NVDA",
-        "EVLV",
-        "SATL",
-        "AMZN",
-        "GOOG",
-        "F",
-        "SCHW",
-        "SPY",
-    ]
+    TICKERS = ["TSLA", "MSFT"]
+    # TICKERS = [
+    #     "TSLA",
+    #     "MSFT",
+    #     "NVDA",
+    #     "EVLV",
+    #     "SATL",
+    #     "AMZN",
+    #     "GOOG",
+    #     "F",
+    #     "SCHW",
+    #     "SPY",
+    # ]
 
     print_header("INDIVIDUAL STOCK RSI PARAMETER OPTIMIZATION")
 
     stock_data = {}
-    for symbol in STOCKS:
-        data = download_stock_data_rsi(
+    for symbol in TICKERS:
+        data = download_stock_data(
             symbol,
-            datetime.datetime.now() - datetime.timedelta(days=30),
-            datetime.datetime.now(),
+            datetime.now() - timedelta(days=1),
+            datetime.now(),
+            "rsi",
         )
         if data is not None:
             stock_data[symbol] = data
@@ -637,16 +614,35 @@ if __name__ == "__main__":
 
     optimization_results = []
 
-    for symbol, price_data in stock_data.items():
-        print_separator("=")
-        print(f"OPTIMIZING {symbol}".center(get_terminal_width()))
-        print_separator("=")
+    print_header("RUNNING PARALLEL OPTIMIZATION")
+    print(f"🚀 Starting parallel optimization for {len(stock_data)} stocks...")
 
-        best_params, all_results = optimize_rsi_for_stock(price_data, symbol)
+    # Run optimizations in parallel
+    with ProcessPoolExecutor(max_workers=min(len(stock_data), 4)) as executor:
+        # Submit all optimization tasks
+        future_to_symbol = {
+            executor.submit(optimize_single_stock, (symbol, price_data)): symbol
+            for symbol, price_data in stock_data.items()
+        }
 
+        # Process completed results
+        completed_results = []
+        for future in as_completed(future_to_symbol):
+            symbol = future_to_symbol[future]
+            try:
+                result = future.result()
+                completed_results.append(result)
+            except Exception as exc:
+                print(f"❌ {symbol} generated an exception: {exc}")
+
+    print(f"\n✅ Parallel optimization completed for {len(completed_results)} stocks")
+
+    # Process and display results sequentially for clean output
+    for symbol, best_params, all_results, price_data in completed_results:
         if best_params:
             optimization_results.append(best_params)
 
+            print_header(f"RESULTS FOR {symbol}")
             print(f"\n🏆 BEST CONFIGURATION FOR {symbol}:")
             print(f"   RSI Window: {best_params['rsi_window']}")
             print(f"   Entry Level: {best_params['entry_level']}")
@@ -662,20 +658,18 @@ if __name__ == "__main__":
             print(f"   Final Capital: ${best_params['final_capital']:,.2f}")
             print(f"   Profit: ${best_params['profit']:,.2f}")
 
-            if len(all_results) > 1:
-                sorted_results = sorted(
-                    all_results, key=lambda x: x["total_return"], reverse=True
-                )[:5]
+            if all_results and len(all_results) > 1:
+                sorted_results = sorted(all_results, key=lambda x: x["total_return"], reverse=True)[:5]
                 print(f"\n📊 TOP 5 CONFIGURATIONS FOR {symbol}:")
                 width = get_terminal_width()
                 rank_width = max(5, (width - 55) // 7)  # Dynamic column width
-                print(
-                    f"{'Rank':<5} {'RSI':<5} {'Entry':<7} {'Exit':<6} {'Return':<10} {'Profit':<12} {'Trades':<8}"
-                )
+                print(f"{'Rank':<5} {'RSI':<5} {'Entry':<7} {'Exit':<6} {'Return':<10} {'Profit':<12} {'Trades':<8}")
                 print_separator()
                 for i, result in enumerate(sorted_results, 1):
                     print(
-                        f"{i:<5} {result['rsi_window']:<5} {result['entry_level']:<7} {result['exit_level']:<6} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['num_trades']:<8}"
+                        f"{i:<5} {result['rsi_window']:<5} {result['entry_level']:<7} "
+                        f"{result['exit_level']:<6} {result['total_return']:<9.2%} "
+                        f"${result['profit']:<10,.0f} {result['num_trades']:<8}"
                     )
 
             print(f"\n📈 Generating graph for {symbol}...")
@@ -692,19 +686,23 @@ if __name__ == "__main__":
         optimization_results.sort(key=lambda x: x["total_return"], reverse=True)
 
         print(
-            f"{'Stock':<8} {'RSI':<5} {'Entry':<7} {'Exit':<6} {'Return':<10} {'Profit':<12} {'Sharpe':<8} {'Trades':<8}"
+            f"{'Stock':<8} {'RSI':<5} {'Entry':<7} {'Exit':<6} "
+            f"{'Return':<10} {'Profit':<12} {'Sharpe':<8} {'Trades':<8}"
         )
         print_separator()
 
         for result in optimization_results:
             print(
-                f"{result['symbol']:<8} {result['rsi_window']:<5} {result['entry_level']:<7} {result['exit_level']:<6} {result['total_return']:<9.2%} ${result['profit']:<10,.0f} {result['sharpe_ratio']:<7.2f} {result['num_trades']:<8}"
+                f"{result['symbol']:<8} {result['rsi_window']:<5} {result['entry_level']:<7} "
+                f"{result['exit_level']:<6} {result['total_return']:<9.2%} "
+                f"${result['profit']:<10,.0f} {result['sharpe_ratio']:<7.2f} {result['num_trades']:<8}"
             )
 
     best_overall = optimization_results[0]
     print(f"\n🥇 BEST STOCK GENERAL: {best_overall['symbol']}")
     print(
-        f"   Configuration: RSI={best_overall['rsi_window']}, Entry={best_overall['entry_level']}, Exit={best_overall['exit_level']}"
+        f"   Configuration: RSI={best_overall['rsi_window']}, "
+        f"Entry={best_overall['entry_level']}, Exit={best_overall['exit_level']}"
     )
     print(f"   Return: {best_overall['total_return']:.2%}")
     print(f"   Profit: ${best_overall['profit']:.2f}")
@@ -712,20 +710,14 @@ if __name__ == "__main__":
     print(f"   Stop Loss: {best_overall['stop_loss']:.2%}")
 
     profitable_stocks = [r for r in optimization_results if r["total_return"] > 0]
-    print(
-        f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}"
-    )
+    print(f"\n📈 Profitable stocks: {len(profitable_stocks)}/{len(optimization_results)}")
 
     if profitable_stocks:
-        avg_return = sum(r["total_return"] for r in profitable_stocks) / len(
-            profitable_stocks
-        )
-        avg_profit = sum(r["profit"] for r in profitable_stocks) / len(
-            profitable_stocks
-        )
+        avg_return = sum(r["total_return"] for r in profitable_stocks) / len(profitable_stocks)
+        avg_profit = sum(r["profit"] for r in profitable_stocks) / len(profitable_stocks)
         total_profit = sum(r["profit"] for r in profitable_stocks)
         print(f"📊 Average return (profitable stocks): {avg_return:.2%}")
-        print(f"💰 Average profit (profitable stocks): ${avg_profit::.2f}")
+        print(f"💰 Average profit (profitable stocks): ${avg_profit:.2f}")
         print(f"💎 Total profit combined: ${total_profit:,.2f}")
 
         show_detailed_trades(optimization_results)

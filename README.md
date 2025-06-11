@@ -15,6 +15,7 @@ The backtesting module provides:
 ## Architecture Overview
 
 The system operates as a batch job that:
+
 1. Fetches historical price data from Alpaca API
 2. Runs grid search optimization on predefined strategies
 3. Evaluates performance metrics (Sharpe ratio, max drawdown, returns)
@@ -46,11 +47,13 @@ python -m venv venv
 ### 3. Activate the virtual environment
 
 **On macOS/Linux:**
+
 ```bash
 source venv/bin/activate
 ```
 
 **On Windows:**
+
 ```bash
 venv\Scripts\activate
 ```
@@ -70,6 +73,7 @@ cp .env.example .env
 ```
 
 Required environment variables:
+
 - `ALPACA_API_KEY`: Your Alpaca API key
 - `ALPACA_SECRET_KEY`: Your Alpaca secret key
 
@@ -89,24 +93,24 @@ Required environment variables:
 ```
 backtesting_module/
 │
-├── requirements.txt        
-├── .env.example           
-├── main.py                
+├── requirements.txt
+├── .env.example
+├── main.py
 │
 ├── data/
-│   ├── alpaca_client.py  
+│   ├── alpaca_client.py
 │   ├── database_client.py
 │
 ├── strategies/
-│   ├── rsi_strategy.py   
-│   ├── vwap_strategy.py  
+│   ├── rsi_strategy.py
+│   ├── vwap_strategy.py
 │
 ├── database/
-│   ├── models.py         
+│   ├── models.py
 │
 ├── utils/
-│   ├── logger.py         
-│   └── helpers.py        
+│   ├── logger.py
+│   └── helpers.py
 ```
 
 ## Usage
@@ -117,6 +121,12 @@ Run the backtesting process locally:
 
 ```bash
 python main.py
+```
+
+Or run specific strategies to try locally, this will run it as modules
+
+````bash
+python -m strategies.vwap_implementation
 ```
 
 ### Strategy Configuration
@@ -136,17 +146,19 @@ VWAP_STRATEGIES = {
     'momentum_confirmation': [0.002, 0.005],
     'intraday_data_period': 30  # days of intraday data
 }
-```
+````
 
 ## Strategy Types
 
 ### RSI
+
 - **Entry**: RSI falls below oversold threshold
 - **Exit**: RSI rises above overbought threshold
 - **Parameters**: RSI period, entry/exit thresholds
 - **Timeframe**: Daily data
 
 ### VWAP Strategies
+
 - **Mean Reversion**: Buy below VWAP, sell above VWAP
 - **Momentum**: Buy on upward VWAP cross, sell on downward cross
 - **Parameters**: Deviation thresholds, confirmation levels
@@ -162,7 +174,6 @@ The system evaluates strategies using:
 - **Calmar Ratio**: Return-to-drawdown ratio
 - **Win Rate**: Percentage of profitable trades
 - **Sortino Ratio**: Downside deviation-adjusted returns
-
 
 ## Monitoring and Logging
 
